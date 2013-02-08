@@ -1,6 +1,6 @@
 #    SyPy: A Python framework for evaluating graph-based Sybil detection
 #    algorithms in social and information networks.
-#    
+#
 #    Copyright (C) 2013  Yazan Boshmaf
 #
 #    This program is free software: you can redistribute it and/or modify
@@ -53,7 +53,6 @@ class BaseDetector:
                 biggest_overlap = len(overlap)
                 self.honests_predicted = list_item
 
-
 class GenericBCCDetector(BaseDetector):
 
     def __init__(self, network):
@@ -65,6 +64,106 @@ class GenericBCCDetector(BaseDetector):
         self._vote_honests_predicted(bcc)
         return Results(self)
 
+class LouvainCommunityDetector(BaseDetector):
+    def __init__(self, network, resolution=0.0001):
+        BaseDetector.__init__(self, network)
+        self.resolution = resolution
+        self.dendrogram = None
+
+    def detect(self):
+        # Structure is a NX graph
+        structure = self.network.graph.structure.copy()
+        self.__construct_dendrogram(structure)
+
+    # -----Attribute List-----
+    # Graphs
+    #   'communities': List of communities
+    #   'size': Sum of all edge weights in graph
+    #
+    # Community
+    #   'weights_within': Sum of edge weights
+    #   'weights_incident': Sum of edge weights incident to nodes
+    #
+    # Edge
+    #   'weight': weight of the edge
+    #
+    # Node
+    #   'community': commuity the node belongs to. INT
+    #   'weights_incident': Sum of edge weights incident to node
+
+    def __construct_dendrogram(self, structure):
+
+        # Initialize the attributes
+        structure.graph['communities'] = []
+        structure.graph['size'] = structure.size(weight='weight')
+        for node in structure:
+            # Create community graph for node
+            community = nx.Graph(structure.subgraph(node))        # Didn't use subgraph here because its attribute share amongst all graphs
+            # Assign value to community attribute
+            structure.node[node]['community'] = community
+            structure.graph['communities'].append(community)
+
+            community.graph['weights_within'] = community.size(weight='weight')
+            community.graph['weights_incident'] = community.graph['weights_within'] + structure.degree(node, weight='weight')
+            structure.node[node]['weights_incident'] = community.graph['weights_incident']
+
+
+        # for community in structure.graph['communities']:
+        #     print community.graph['weights_within'], community.graph['weights_incident'], structure.degree(community.nodes()[0], weight='weight')
+
+
+        outer_mod_increase = 0
+
+        # Phase 1: Move nodes around until modularity has stabilized
+        while True:
+            inner_mod_increase = 0
+
+            for node in structure:
+                max_mod_increase = 0
+                best_node = None
+                for neighbor in structure.neighbors(node):
+                    mod_increase = self.__modularity(structure, node, structure.node[neighbor]['community'])
+                    if mod_increase > max_mod_increase:
+                        max_mod_increase = mod_increase
+                        best_node = neighbor
+                    # Move node to best_node's community
+
+                inner_mod_increase += max_mod_increase
+
+            outer_mod_increase += inner_mod_increase
+
+            # Modularity must increase by RESOLUTION per iteration. Otherwise the graph is considered to be converged
+            if inner_mod_increase <= self.resolution:
+                break
+
+        # # Phase 2: Aggregate nodes within each community
+        # # Replace structure with new graph
+        # community_graph = nx.Graph(structure)
+
+        # # graph was converged to begin with
+        # if outer_mod_increase <= self.resolution:
+        #     self.dendrogram = community_graph
+
+        # # call itself recursively until it has converged
+        # self.__construct_dendrogram(self, community_graph)
+
+
+    # To Do: replace this with single_node modularity equation
+    def __modularity(self, structure, node, community):
+        # compute Ki_in
+        Ki_in = 0
+        for neighbor in structure.neighbors(node):
+            if neighbor in community.nodes():
+                Ki_in += structure[node][neighbor].get('weight', 1)
+        mod_change = (community.graph['weights_within'] + Ki_in) / (2 * structure.graph['size'])
+        mod_change -= ((community.graph['weights_incident'] + structure.node[node]['weights_incident']) / (2 * structure.graph['size'])) ** 2
+        mod_change -= (community.graph['weights_within']) / (2 * structure.graph['size'])
+        mod_change -= (community.graph['weights_incident'] / (2 * structure.graph['size'])) ** 2
+        mod_change -= (structure.node[node]['weights_incident'] / (2 * structure.graph['size'])) ** 2
+
+        return  mod_change
+
+    def __
 
 class GirvanNewmanCommunityDetector(BaseDetector):
     """
