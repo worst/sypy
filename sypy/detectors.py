@@ -81,8 +81,8 @@ class LouvainCommunityDetector(BaseDetector):
     #   'size': Sum of all edge weights in graph
     #
     # Community
-    #   'weights_within': Sum of edge weights
-    #   'weights_incident': Sum of edge weights incident to nodes
+    #   'weights_within[community]': Sum of edge weights
+    #   'weights_incident[community]': Sum of edge weights incident to nodes
     #
     # Edge
     #   'weight': weight of the edge
@@ -98,7 +98,9 @@ class LouvainCommunityDetector(BaseDetector):
         structure.graph['size'] = structure.size(weight='weight')
         for node in structure:
             # Create community graph for node
-            community = nx.Graph(structure.subgraph(node))        # Didn't use subgraph here because its attribute share amongst all graphs
+            # Can't use subgraph here because its attribute are shared among all graphs
+            # Community is used SOLELY to store it's member nodes and attribute data. It does not contain the actual representatio of the graph. Consider switching to hash table
+            community = nx.Graph(structure.subgraph(node))
             # Assign value to community attribute
             structure.node[node]['community'] = community
             structure.graph['communities'].append(community)
@@ -112,29 +114,30 @@ class LouvainCommunityDetector(BaseDetector):
         #     print community.graph['weights_within'], community.graph['weights_incident'], structure.degree(community.nodes()[0], weight='weight')
 
 
-        outer_mod_increase = 0
+        # outer_mod_increase = 0
 
-        # Phase 1: Move nodes around until modularity has stabilized
-        while True:
-            inner_mod_increase = 0
+        # # Phase 1: Move nodes around until modularity has stabilized
+        # while True:
+        #     inner_mod_increase = 0
 
-            for node in structure:
-                max_mod_increase = 0
-                best_node = None
-                for neighbor in structure.neighbors(node):
-                    mod_increase = self.__modularity(structure, node, structure.node[neighbor]['community'])
-                    if mod_increase > max_mod_increase:
-                        max_mod_increase = mod_increase
-                        best_node = neighbor
-                    # Move node to best_node's community
+        #     for node in structure:
+        #         max_mod_increase = 0
+        #         best_node = None
+        #         for neighbor in structure.neighbors(node):
+        #             mod_increase = self.__modularity(structure, node, structure.node[neighbor]['community'])
+        #             if mod_increase > max_mod_increase:
+        #                 max_mod_increase = mod_increase
+        #                 best_node = neighbor
+        #         # Move node to best_node's community
+        #         self.__move_node(structure, node, best_node)
 
-                inner_mod_increase += max_mod_increase
+        #         inner_mod_increase += max_mod_increase
 
-            outer_mod_increase += inner_mod_increase
+        #     outer_mod_increase += inner_mod_increase
 
-            # Modularity must increase by RESOLUTION per iteration. Otherwise the graph is considered to be converged
-            if inner_mod_increase <= self.resolution:
-                break
+        #     # Modularity must increase by RESOLUTION per iteration. Otherwise the graph is considered to be converged
+        #     if inner_mod_increase <= self.resolution:
+        #         break
 
         # # Phase 2: Aggregate nodes within each community
         # # Replace structure with new graph
@@ -150,20 +153,38 @@ class LouvainCommunityDetector(BaseDetector):
 
     # To Do: replace this with single_node modularity equation
     def __modularity(self, structure, node, community):
-        # compute Ki_in
-        Ki_in = 0
-        for neighbor in structure.neighbors(node):
-            if neighbor in community.nodes():
-                Ki_in += structure[node][neighbor].get('weight', 1)
-        mod_change = (community.graph['weights_within'] + Ki_in) / (2 * structure.graph['size'])
-        mod_change -= ((community.graph['weights_incident'] + structure.node[node]['weights_incident']) / (2 * structure.graph['size'])) ** 2
-        mod_change -= (community.graph['weights_within']) / (2 * structure.graph['size'])
-        mod_change -= (community.graph['weights_incident'] / (2 * structure.graph['size'])) ** 2
-        mod_change -= (structure.node[node]['weights_incident'] / (2 * structure.graph['size'])) ** 2
+        # # compute Ki_in
+        # Ki_in = 0
+        # for neighbor in structure.neighbors(node):
+        #     if neighbor in community.nodes():
+        #         Ki_in += structure[node][neighbor].get('weight', 1)
+        # mod_change = (community.graph['weights_within'] + Ki_in) / (2 * structure.graph['size'])
+        # mod_change -= ((community.graph['weights_incident'] + structure.node[node]['weights_incident']) / (2 * structure.graph['size'])) ** 2
+        # mod_change -= (community.graph['weights_within']) / (2 * structure.graph['size'])
+        # mod_change -= (community.graph['weights_incident'] / (2 * structure.graph['size'])) ** 2
+        # mod_change -= (structure.node[node]['weights_incident'] / (2 * structure.graph['size'])) ** 2
 
         return  mod_change
 
-    def __
+    def __move_node(self, structure, node_subject, node_dest):
+        # #Remove node_origin from its old community
+        # node_subject_community = structure.node[node_subject]['community']
+        # node_subject_community.remove_node(node_subject)
+
+        # #if old_community has no more nodes, remove it
+        # if node_subject_community.order() == 0:
+        #     structure.graph['communities'].remove(node_subject_community)
+        #     del node_subject_community
+
+        # #place node_subject in the same community as node_dest
+        # #Update both node_subject and the community attributes
+        # node_dest_community = structure.node[node_dest]['community']
+        # structure.node[node_subject]['community'] = node_dest_community
+        # node_dest_community.add_node(node_subject)
+
+        # #Update community.graph[weights_within], community.graph[weights_incident],
+        return
+
 
 class GirvanNewmanCommunityDetector(BaseDetector):
     """
