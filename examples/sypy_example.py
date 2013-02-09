@@ -33,13 +33,13 @@ if __name__ == "__main__":
 
     honest_region = sypy.Region(
         graph = sypy.SmallWorldGraph(
-            num_nodes=600,
+            num_nodes=500,
             node_degree=2,
             rewire_prob=0.8
         ),
         name="HonestSmallWorldGraph"
     )
-    honest_region.pick_random_honest_nodes(num_nodes=5)
+    honest_region.pick_random_honest_nodes(num_nodes=10)
 
     social_network = sypy.Network(
         left_region=honest_region,
