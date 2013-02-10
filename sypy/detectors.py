@@ -21,6 +21,8 @@ import networkx as nx
 import random
 import math
 import copy
+import community
+from time import clock
 
 from results import *
 
@@ -65,20 +67,21 @@ class GenericBCCDetector(BaseDetector):
         return Results(self)
 
 class LouvainCommunityDetector(BaseDetector):
-    def __init__(self, network, resolution=0.000001):
+    def __init__(self, network):
         BaseDetector.__init__(self, network)
-        self.resolution = resolution
-        self.max_iter = 1
+        self.max_pass = 100
         self.dendrogram = []
-        self.passes = 0
 
     def detect(self):
         structure = self.network.graph.structure.copy()
-        self.__construct_dendrogram(structure)
 
+        # results = community.best_partition(structure)
+        # print structure.order(), len(set(results.values()))
+
+        self.__construct_dendrogram(structure)
         results = self.dendrogram[0]
-        for dendro in range(1, len(self.dendrogram)):
-            for node in range(structure.order()):
+        for dendro in xrange(1, len(self.dendrogram)):
+            for node in xrange(structure.order()):
                 results[node] = self.dendrogram[dendro][results[node]]
 
         reverse = {}
@@ -92,54 +95,29 @@ class LouvainCommunityDetector(BaseDetector):
         return Results(self)
 
     def __construct_dendrogram(self, structure):
-        self.passes += 1
-        print self.passes, structure.order(), structure.size(weight='weight')
-        # Initialize the attributes
-        structure.graph['communities'] = []
-        structure.graph['size'] = structure.size(weight='weight')
-        structure.graph['weights_within'] = {}
-        structure.graph['weights_incident'] = {}
-        for node in structure:
-            community = structure.subgraph(node)
-            structure.node[node]['community'] = community
-            structure.graph['communities'].append(community)
-            community.graph['weights_within'][community] = 0
-            community.graph['weights_incident'][community] =\
-                structure.degree(node, weight='weight')
-            structure.node[node]['weights_incident'] =\
-                community.graph['weights_incident'][community]
-
-        # Phase 1
-        outer_mod_increase, iter_count = 0, 0
+        self.__init_graph(structure)
+        outer_changed, count = False, 0
         while True:
-            inner_mod_increase = 0
-
-            for node in structure:
-                max_mod_increase = 0
-                best_node = None
-                print node, structure.neighbors(node)
-                for neighbor in structure.neighbors(node):
-                    mod_increase = self.__modularity(
-                        structure,
-                        node,
-                        neighbor
-                    )
+            inner_changed = False
+            for node in structure.nodes_iter():
+                max_mod_increase, best_node = 0, None
+                self.__remove(structure, node, False)
+                for neighbor in structure.neighbors_iter(node):
+                    mod_increase = self.__modularity(structure, node, neighbor)
                     if mod_increase > max_mod_increase:
                         max_mod_increase = mod_increase
                         best_node = neighbor
                 if best_node != None:
-                    self.__move_node(
-                        structure,
-                        node,
-                        best_node
-                    )
-                inner_mod_increase += max_mod_increase
-            outer_mod_increase += inner_mod_increase
-            iter_count += 1
-            if inner_mod_increase < self.resolution or\
-                iter_count > self.max_iter:
-                print inner_mod_increase
+                    self.__remove(structure, node, True)
+                    self.__insert(structure, node, best_node)
+                    inner_changed = True
+                    outer_changed = True
+                else:
+                    self.__insert(structure, node, node)
+            count += 1
+            if not inner_changed or count == self.max_pass:
                 break
+
 
         # Phase 2
         community_graph = nx.Graph()
@@ -147,18 +125,17 @@ class LouvainCommunityDetector(BaseDetector):
             range(len(structure.graph['communities']))
         )
 
-        community_dict = {}
-        count = 0
+        community_dict, count = {}, 0
         for community in structure.graph['communities']:
             community_dict[community] = count
             count += 1
 
         node_dict = {}
-        for node in structure:
+        for node in structure.nodes_iter():
             node_dict[node] = community_dict[structure.node[node]['community']]
         self.dendrogram.append(node_dict)
 
-        for (u, v) in structure.edges():
+        for (u, v) in structure.edges_iter():
             u_node = community_dict[structure.node[u]['community']]
             v_node = community_dict[structure.node[v]['community']]
             try:
@@ -168,66 +145,90 @@ class LouvainCommunityDetector(BaseDetector):
                 weight = structure[u][v].get('weight', 1)
             community_graph.add_edge(u_node, v_node, weight=weight)
 
-        if outer_mod_increase <= self.resolution:
+        if not outer_changed:
             return
 
         self.__construct_dendrogram(community_graph)
 
-    def __modularity(self, structure, node, neighbor):
-        if node == neighbor:
+    def __init_graph(self, structure):
+        structure.graph['communities'] = []
+        structure.graph['size'] = structure.size(weight='weight')
+        structure.graph['weights_within'] = {}
+        structure.graph['weights_incident'] = {}
+        for node in structure.nodes_iter():
+            community = structure.subgraph(node)
+            structure.node[node]['community'] = community
+            structure.graph['communities'].append(community)
+            community.graph['weights_within'][community] = 0
+            structure.node[node]['degree'] =\
+                community.graph['weights_incident'][community] =\
+                structure.degree(node, weight='weight')
+
+    def __modularity(self, structure, node, dest):
+        if node == dest:
             return 0
 
-        community = structure.node[neighbor]['community']
+        community = structure.node[dest]['community']
         weights_between = reduce(lambda x, y: x+y,
             [structure[node][neighbor].get('weight', 1)\
-            for neighbor in structure.neighbors(node)\
+            for neighbor in structure.neighbors_iter(node)\
             if neighbor in community])
 
-        mod_change  = (community.graph['weights_within'][community] +\
-            weights_between) / (2 * structure.graph['size']) -\
-            ((community.graph['weights_incident'][community] +\
-            structure.node[node]['weights_incident']) /\
-            (2 * structure.graph['size'])) ** 2 -\
-            (community.graph['weights_within'][community]) /\
-            (2 * structure.graph['size']) -\
-            (community.graph['weights_incident'][community] /\
-            (2 * structure.graph['size'])) ** 2 -\
-            (structure.node[node]['weights_incident'] /\
-            (2 * structure.graph['size'])) ** 2
+        size = (structure.graph['size'])
+        weights_incident = community.graph['weights_incident'][community]
+        weights_within = community.graph['weights_within'][community]
+        degree = structure.node[node]['degree']
+
+        mod_change = (weights_between -\
+            (weights_incident * (weights_incident + degree) +\
+            2 * degree) / size) / (2 * size)
 
         return  mod_change
 
-    def __move_node(self, structure, source, target):
-        source_comm = structure.node[source]['community']
-        source_comm.remove_node(source)
+    def __insert(self, structure, node, dest):
+        community = structure.node[dest]['community']
+        structure.node[node]['community'] = community
+        community.add_node(node)
 
-        target_comm = structure.node[target]['community']
-        structure.node[source]['community'] = target_comm
-        target_comm.add_node(source)
+        try:
+            weights_between = reduce(lambda x, y: x+y,
+                [structure[node][neighbor].get('weight', 1)\
+                for neighbor in structure.neighbors_iter(node)\
+                if neighbor in community])
+        except TypeError:
+            weights_between = 0
 
-        empty = False
-        if source_comm.order() == 0:
-            structure.graph['communities'].remove(source_comm)
-            del source_comm
-            empty = True
+        community.graph['weights_within'][community] =\
+            community.size(weight='weight')
 
-        target_comm.graph['weights_within'][target_comm] =\
-            target_comm.size(weight='weight')
+        community.graph['weights_incident'][community] +=\
+            structure.node[node]['degree'] - weights_between
 
-        weights_between = reduce(lambda x, y: x+y,
-            [structure[source][neighbor].get('weight', 1)\
-            for neighbor in structure.neighbors(source)\
-            if neighbor in target_comm])
+    def __remove(self, structure, node, purge):
+        community = structure.node[node]['community']
+        if node in community:
+            community.remove_node(node)
 
-        target_comm.graph['weights_incident'][target_comm] +=\
-            structure.node[source]['weights_incident'] - weights_between
+        if community.order()==0 and purge:
+            structure.graph['communities'].remove(community)
+            del community
+            structure.node[node]['community'] = None
+        else:
+            try:
+                weights_between = reduce(lambda x, y: x+y,
+                [structure[node][neighbor].get('weight', 1)\
+                for neighbor in structure.neighbors_iter(node)\
+                if neighbor in community])
+            except TypeError:
+                weights_between = 0
 
-        if not empty:
-            source_comm.graph['weights_within'][source_comm] =\
-                source_comm.size(weight='weight')
+            community.graph['weights_within'][community] =\
+                community.size(weight='weight')
 
-            source_comm.graph['weights_incident'][source_comm] -=\
-                structure.node[source]['weights_incident'] + weights_between
+            community.graph['weights_incident'][community] -=\
+                structure.node[node]['degree'] + weights_between
+
+
 
 
 class GirvanNewmanCommunityDetector(BaseDetector):
